@@ -145,13 +145,13 @@ start_build_process() {
     git am 002-temp-fix-camera.patch
     cd -
 
-    echo ">>> [7/7] Mengambil device, vendor, dan kernel trees..."
-    git clone https://github.com/aoitsme/android_kernel_sony_sdm845 -b bpf --depth=1 kernel/sony/sdm845
-    git clone https://github.com/aoi-itsme/android_device_sony_"$DEVICE_CODE" -b lineage-23.2 --depth=1 device/sony/"$DEVICE_CODE"
-    git clone https://github.com/aoi-itsme/android_device_sony_tama-common -b lineage-23.2 --depth=1 device/sony/tama-common
+    echo ">>> [7/7] Mengambil device, vendor, dan kernel trees (romiyusnandar - Dynamic Partition)..."
+    git clone https://github.com/romiyusnandar/kernel_sony_sdm845 -b bpf --depth=1 kernel/sony/sdm845
+    git clone https://github.com/romiyusnandar/device_sony_"$DEVICE_CODE" -b lineage-23.2 --depth=1 device/sony/"$DEVICE_CODE"
+    git clone https://github.com/romiyusnandar/device_sony_tama-common -b lineage-23.2 --depth=1 device/sony/tama-common
     git clone https://github.com/aoitsme/android_hardware_sony_SonyOpenTelephony -b lineage-23.2 --depth=1 hardware/sony/SonyOpenTelephony
-    git clone https://github.com/aoitsme/proprietary_vendor_sony_"$DEVICE_CODE" -b lineage-23.2 --depth=1 vendor/sony/"$DEVICE_CODE"
-    git clone https://github.com/aoitsme/proprietary_vendor_sony_tama-common -b lineage-23.2 --depth=1 vendor/sony/tama-common
+    git clone https://github.com/romiyusnandar/vendor_sony_"$DEVICE_CODE" -b lineage-23.2 --depth=1 vendor/sony/"$DEVICE_CODE"
+    git clone https://github.com/romiyusnandar/vendor_sony_tama-common -b bka --depth=1 vendor/sony/tama-common
     git clone https://github.com/aoi-itsme/keys -b new --depth=1 vendor/lineage-priv
     
     echo "=========================================================="
