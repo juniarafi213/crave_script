@@ -159,7 +159,8 @@ force_opengl_default() {
 }
 
 set_device_vars() {
-  case "$1" in
+  local target="${1#--}"
+  case "$target" in
     akari)
       DEVICE_CODE="akari"
       DEVICE_REPO="https://github.com/juniarafi213/device_sony_akari"
@@ -168,10 +169,10 @@ set_device_vars() {
       VENDOR_BRANCH="lineage-23.2"
       ;;
     apollo|akatsuki|aurora)
-      DEVICE_CODE="$1"
-      DEVICE_REPO="https://github.com/juniarafi213/device_sony_$1"
+      DEVICE_CODE="$target"
+      DEVICE_REPO="https://github.com/juniarafi213/device_sony_$target"
       DEVICE_BRANCH="lineage-23.2"
-      VENDOR_REPO="https://github.com/juniarafi213/vendor_sony_$1"
+      VENDOR_REPO="https://github.com/juniarafi213/vendor_sony_$target"
       VENDOR_BRANCH="lineage-23.2"
       ;;
     *)
@@ -271,10 +272,5 @@ start_build_process() {
 # =========================================================
 # MAIN
 # =========================================================
-if [ -z "$1" ]; then
-  usage
-  exit 1
-fi
-
-set_device_vars "$1"
+set_device_vars "${1:---akari}"
 start_build_process
