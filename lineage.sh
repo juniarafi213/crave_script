@@ -1,215 +1,280 @@
 #!/bin/bash
-# =========================================================
-# LineageOS 23.2 (Android 16) Build Script for Sony Xperia XZ2 (akari)
-# Diadaptasi dari: https://github.com/aoitsme/crave_script
-# =========================================================
+#
+# LineageOS 23.2 build script for Sony tama devices on foss.crave.io
+#
+# Usage:
+#   crave run --no-patch -- "curl -fsSL https://raw.githubusercontent.com/romiyusnandar/crave_script/main/lineage.sh | bash -s -- --akari"
+#
+# Notes:
+#   - Run this from inside the LineageOS 23.2 crave project workspace
+#     (or pass --projectID <id> to `crave run`).
+#   - Options: --akari | --apollo | --akatsuki | --aurora
+#     Only akari is fully wired to romiyusnandar forks right now; fork the
+#     device/vendor repos for the other codenames first.
+#   - If built on AxionAOSP, its Vulkan-first defaults are overridden so the
+#     device defaults to OpenGL (see force_opengl_default).
 
-DEVICE_CODE="akari"
+set -o pipefail
+
+# =========================================================
+# CONFIGURATION
+# =========================================================
 BUILD_TARGET="LineageOS"
-ANDROID_VERSION="16"
+ANDROID_VERSION="23.2"
+DEVICE_CODE=""
 
-# Setup Timezone
+BASE_REPO_INIT="repo init -u https://github.com/LineageOS/android.git -b lineage-23.2 --git-lfs --depth=1"
+
+KERNEL_REPO="https://github.com/juniarafi213/kernel_sony_sdm845"
+KERNEL_BRANCH="bpf"
+
+HARDWARE_SONY_REPO="https://github.com/LineageOS/android_hardware_sony_SonyOpenTelephony"
+HARDWARE_SONY_BRANCH="lineage-23.2"
+
+DEVICE_COMMON_REPO="https://github.com/juniarafi213/device_sony_tama"
+DEVICE_COMMON_BRANCH="lineage-23.2"
+
+VENDOR_COMMON_REPO="https://github.com/aoitsme/proprietary_vendor_sony_tama-common"
+VENDOR_COMMON_BRANCH="lineage-23.2"
+
+# Patches to apply after sync, before build.
+# Format: "target_path|patch_url"  (applied with `git am -3`)
+# Uncomment the camera fix below to mirror aoitsme's axion.sh.
+PATCHES=(
+  "frameworks/native|https://raw.githubusercontent.com/aoitsme/crave_script/main/patch/001-temp-fix-camera.patch"
+  "frameworks/native|https://raw.githubusercontent.com/aoitsme/crave_script/main/patch/002-temp-fix-camera.patch"
+)
+
+# Telegram notifications (base64-encoded credentials, override via env if needed)
+TG_BOT_TOKEN="${TG_BOT_TOKEN:-$(echo "ODUxNjE1Njk1NTpBQUZVVUxLb2FmWW1NZ0VCRmprOTRsS2FadDdta2VFTUppTQ==" | base64 -d)}"
+TG_CHAT_ID="${TG_CHAT_ID:-$(echo "NjcwMTAwNTg2NQ==" | base64 -d)}"
+
+# Setup timezone
 export TZ="Asia/Jakarta"
 
-# Telegram Bot (Opsional: isi jika ingin notifikasi ke Telegram Anda sendiri)
-TG_BOT_TOKEN="8516156955:AAFUULKoafYmMgEBFjk94lKaZt7mkeEMJiM"
-TG_CHAT_ID="6701005865"
+# =========================================================
+# HELPERS
+# =========================================================
 
-# =========================================================
-# TELEGRAM FUNCTIONS
-# =========================================================
-send_telegram_msg() {
-  local chat_id="$1"
-  local message="$2"
-  if [ -n "$TG_BOT_TOKEN" ] && [ -n "$chat_id" ]; then
-    echo "Mengirim notifikasi ke Telegram..."
-    curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
-      -d "chat_id=${chat_id}" \
-      --data-urlencode "text=${message}" \
-      -d "parse_mode=HTML" \
-      -d "disable_web_page_preview=true" &> /dev/null || true
-  fi
+usage() {
+  echo "Usage: $0 [--akari | --apollo | --akatsuki | --aurora]"
 }
 
-send_telegram_file() {
-  local chat_id="$1"
-  local file_path="$2"
-  if [ -n "$TG_BOT_TOKEN" ] && [ -n "$chat_id" ] && [ -f "$file_path" ]; then
-    curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" \
-      -F chat_id="${chat_id}" \
-      -F document=@"${file_path}" &> /dev/null || true
+tg_send() {
+  if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
+    return 0
   fi
+  curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+    -d "chat_id=${TG_CHAT_ID}" \
+    --data-urlencode "text=$1" \
+    -d "parse_mode=HTML" \
+    -d "disable_web_page_preview=true" &> /dev/null
 }
 
 format_duration() {
-    local T=$1
-    local H=$((T/3600))
-    local M=$(( (T%3600)/60 ))
-    local S=$((T%60))
-    printf "%02d jam, %02d menit, %02d detik" $H $M $S
+  local T=$1
+  local H=$((T/3600))
+  local M=$(( (T%3600)/60 ))
+  local S=$((T%60))
+  printf "%02d hours, %02d minutes, %02d seconds" "$H" "$M" "$S"
 }
 
-# =========================================================
-# GOFILE UPLOAD LOGIC
-# =========================================================
 upload_files() {
   if [ $# -eq 0 ]; then
-      echo "Error: Tidak ada file yang ditentukan untuk upload." >&2
-      return 1
+    echo "Error: No file specified for upload." >&2
+    echo "UPLOAD_FAILED"
+    return 1
   fi
 
-  echo "Mengambil server terbaik dari Gofile..." >&2
+  echo "Fetching best server from Gofile..." >&2
   BEST_SERVER=$(curl -s https://api.gofile.io/servers | grep -oP '(?<="name":")[^"]*' | head -n 1)
-
   if [ -z "$BEST_SERVER" ]; then
-      echo "Gagal mengambil server aktif. Menggunakan fallback store3..." >&2
-      BEST_SERVER="store3"
+    echo "Failed to get active server. Falling back to store3..." >&2
+    BEST_SERVER="store3"
   fi
 
   for FILE in "$@"; do
     if [ ! -f "$FILE" ]; then
-      echo "\"$FILE\" tidak ditemukan! Lewati." >&2
+      echo "\"$FILE\" not found! Skipping." >&2
       continue
     fi
 
     FILENAME="${FILE##*/}"
     FILESIZE=$(du -h "$FILE" | cut -f1)
-    
-    echo "Mengupload $FILENAME ($FILESIZE) ke $BEST_SERVER..." >&2
 
+    echo "Uploading $FILENAME ($FILESIZE) via $BEST_SERVER..." >&2
     RESPONSE=$(curl -# -F "file=@$FILE" "https://${BEST_SERVER}.gofile.io/contents/uploadfile")
     UPLOAD_STATUS=$(echo "$RESPONSE" | grep -o '"status":"ok"')
 
     if [[ -n "$UPLOAD_STATUS" ]]; then
-        GOLINK=$(echo "$RESPONSE" | grep -oP '"downloadPage":"\K[^"]+')
-        echo "Upload Berhasil!" >&2
-        echo "Link Unduh: ${GOLINK}" >&2
-        echo "${FILENAME}|${FILESIZE}|${GOLINK}"
-        return 0
+      GOLINK=$(echo "$RESPONSE" | grep -oP '"downloadPage":"\K[^"]+')
+      echo "Success!" >&2
+      echo "Link: ${GOLINK}" >&2
+      echo "${FILENAME}|${FILESIZE}|${GOLINK}"
+      return 0
     else
-        echo "Upload gagal! Response: $RESPONSE" >&2
-        echo "UPLOAD_FAILED"
-        return 1
+      echo "Upload failed! Response: $RESPONSE" >&2
+      echo "UPLOAD_FAILED"
+      return 1
     fi
   done
 }
 
-# =========================================================
-# BUILD FUNCTION
-# =========================================================
-start_build_process() {
-    START_TIME=$(date +%s)
+apply_patches() {
+  if [ ${#PATCHES[@]} -eq 0 ]; then
+    echo "No patches to apply."
+    return 0
+  fi
 
-    echo "=========================================================="
-    echo "  Memulai Build LineageOS 23.2 (Android 16) untuk $DEVICE_CODE"
-    echo "=========================================================="
-
-    initial_msg=$'⚙️ <b>ROM Build Dimulai!</b>\n\n• <b>ROM:</b> '"$BUILD_TARGET"$'\n• <b>Android:</b> '"$ANDROID_VERSION"$'\n• <b>Device:</b> '"$DEVICE_CODE"$'\n• <b>Server:</b> foss.crave.io\n• <b>Mulai:</b> '"$(date '+%Y-%m-%d %H:%M:%S %Z')"
-    send_telegram_msg "$TG_CHAT_ID" "$initial_msg"
-    
-    echo ">>> [1/7] Membersihkan workspace & folder lama..."
-    rm -rf .repo/local_manifests
-    rm -rf kernel/configs
-    rm -rf hardware/interfaces
-    rm -rf frameworks/native
-    rm -rf kernel/sony
-    rm -rf device/sony
-    rm -rf hardware/sony
-    rm -rf vendor/sony
-    rm -rf vendor/lineage-priv
-
-    echo ">>> [2/7] Konfigurasi identitas Git..."
-    git config --global user.name "jun"
-    git config --global user.email "juniarafi506@gmail.com"
-
-    echo ">>> [3/7] Inisialisasi LineageOS 23.2..."
-    repo init -u https://github.com/LineageOS/android.git -b lineage-23.2 --git-lfs --depth=1
-
-    echo ">>> [4/7] Sinkronisasi repository..."
-    if [ -f /opt/crave/resync.sh ]; then
-      /opt/crave/resync.sh
-    fi
-    repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
-
-    echo ">>> [5/7] Mengganti kernel/configs & hardware/interfaces (fix Android 16)..."
-    rm -rf kernel/configs
-    rm -rf hardware/interfaces
-    git clone https://github.com/crdroidandroid/android_kernel_configs -b 16.0 --depth=1 kernel/configs
-    git clone https://github.com/crdroidandroid/android_hardware_interfaces -b 16.0 --depth=1 hardware/interfaces
-    
-    echo ">>> [6/7] Menerapkan patch frameworks/native (fix kamera Android 16)..."
-    cd frameworks/native
-    wget -q https://raw.githubusercontent.com/aoitsme/crave_script/refs/heads/main/patch/001-temp-fix-camera.patch
-    wget -q https://raw.githubusercontent.com/aoitsme/crave_script/refs/heads/main/patch/002-temp-fix-camera.patch
-    git am 001-temp-fix-camera.patch
-    git am 002-temp-fix-camera.patch
-    cd -
-
-    echo ">>> [7/7] Mengambil device, vendor, dan kernel trees (romiyusnandar - Dynamic Partition)..."
-    git clone https://github.com/romiyusnandar/kernel_sony_sdm845 -b bpf --depth=1 kernel/sony/sdm845
-    git clone https://github.com/romiyusnandar/device_sony_"$DEVICE_CODE" -b lineage-23.2 --depth=1 device/sony/"$DEVICE_CODE"
-    git clone https://github.com/romiyusnandar/device_sony_tama-common -b lineage-23.2 --depth=1 device/sony/tama-common
-    git clone https://github.com/aoitsme/android_hardware_sony_SonyOpenTelephony -b lineage-23.2 --depth=1 hardware/sony/SonyOpenTelephony
-    git clone https://github.com/romiyusnandar/vendor_sony_"$DEVICE_CODE" -b lineage-23.2 --depth=1 vendor/sony/"$DEVICE_CODE"
-    git clone https://github.com/romiyusnandar/vendor_sony_tama-common -b bka --depth=1 vendor/sony/tama-common
-    git clone https://github.com/aoi-itsme/keys -b new --depth=1 vendor/lineage-priv
-    
-    echo "=========================================================="
-    echo " Memulai kompilasi ROM..."
-    echo "=========================================================="
-    . build/envsetup.sh
-    m installclean
-    brunch "$DEVICE_CODE"
-
-    BUILD_STATUS=$?
-
-    END_TIME=$(date +%s)
-    DURATION=$((END_TIME - START_TIME))
-    DURATION_FORMATTED=$(format_duration $DURATION)
-
-    if [[ $BUILD_STATUS -eq 0 ]]; then
-        echo "=========================================================="
-        echo " Build Sukses! Durasi: $DURATION_FORMATTED"
-        echo "=========================================================="
-        ZIP_FILE=$(ls -t out/target/product/"$DEVICE_CODE"/*"$DEVICE_CODE"*.zip 2>/dev/null | head -n 1)
-        
-        if [ -n "$ZIP_FILE" ]; then
-            echo "File ROM: $ZIP_FILE"
-            UPLOAD_RESULT=$(upload_files "$ZIP_FILE")
-
-            if [[ "$UPLOAD_RESULT" != "UPLOAD_FAILED" ]]; then
-                IFS='|' read -r FILENAME FILESIZE GOLINK <<< "$UPLOAD_RESULT"
-                final_msg=$'✅ <b>ROM Build Berhasil!</b>\n\n• <b>ROM:</b> '"$BUILD_TARGET"$'\n• <b>Android:</b> '"$ANDROID_VERSION"$'\n• <b>Device:</b> '"$DEVICE_CODE"$'\n• <b>File:</b> '"$FILENAME"$'\n• <b>Ukuran:</b> '"$FILESIZE"$'\n• <b>Link Unduh:</b> '"$GOLINK"$'\n• <b>Durasi:</b> '"$DURATION_FORMATTED"$'\n• <b>Status:</b> Sukses'
-            else
-                final_msg=$'⚠️ <b>ROM Build Berhasil, Gagal Upload ke Gofile</b>\n\n• <b>Device:</b> '"$DEVICE_CODE"$'\n• <b>Durasi:</b> '"$DURATION_FORMATTED"
-            fi
-        fi
-    else
-        echo "=========================================================="
-        echo " Build Gagal dengan exit code: $BUILD_STATUS"
-        echo "=========================================================="
-        final_msg=$'❌ <b>ROM Build Gagal!</b>\n\n• <b>ROM:</b> '"$BUILD_TARGET"$'\n• <b>Device:</b> '"$DEVICE_CODE"$'\n• <b>Durasi:</b> '"$DURATION_FORMATTED"$'\n• <b>Exit Code:</b> '"$BUILD_STATUS"
-    fi
-
-    send_telegram_msg "$TG_CHAT_ID" "$final_msg"
-    
-    if [[ $BUILD_STATUS -ne 0 ]]; then
-        send_telegram_file "$TG_CHAT_ID" "out/error.log"
-    fi
-
-    return $BUILD_STATUS
+  for entry in "${PATCHES[@]}"; do
+    [ -z "$entry" ] && continue
+    local dir="${entry%%|*}"
+    local url="${entry#*|}"
+    local file="/tmp/$(basename "$url")"
+    echo "Applying patch: $url -> $dir"
+    wget -q "$url" -O "$file" || { echo "Download failed: $url"; return 1; }
+    ( cd "$dir" && git am -3 "$file" ) || { echo "Patch failed: $url"; return 1; }
+  done
+  return 0
 }
 
-case "$1" in
-    --aurora)
-        DEVICE_CODE="aurora"
-        ;;
-    --akatsuki)
-        DEVICE_CODE="akatsuki"
-        ;;
-    --akari|*)
-        DEVICE_CODE="akari"
-        ;;
-esac
+# AxionAOSP forces Vulkan-first; turn it back to an OpenGL default.
+# No-op on non-Axion builds (dir won't exist).
+force_opengl_default() {
+  local prop="device/axion/common/config/defaults_common.prop"
+  local vk="device/axion/common/config/vulkan/vulkan.mk"
 
+  if [ ! -f "$prop" ]; then
+    echo "Axion common prop not found, skipping OpenGL default override."
+    return 0
+  fi
+
+  echo "Forcing OpenGL default (disabling Axion Vulkan-first)..."
+  sed -i 's/^debug\.hwui\.renderer=.*/debug.hwui.renderer=skiagl/' "$prop"
+  sed -i 's/^debug\.renderengine\.backend=.*/debug.renderengine.backend=skiaglthreaded/' "$prop"
+  if [ -f "$vk" ]; then
+    sed -i 's/^TARGET_USES_VULKAN := *true/TARGET_USES_VULKAN := false/' "$vk"
+  fi
+  return 0
+}
+
+set_device_vars() {
+  case "$1" in
+    akari)
+      DEVICE_CODE="akari"
+      DEVICE_REPO="https://github.com/juniarafi213/device_sony_akari"
+      DEVICE_BRANCH="lineage-23.2"
+      VENDOR_REPO="https://github.com/juniarafi213/vendor_sony_akari"
+      VENDOR_BRANCH="lineage-23.2"
+      ;;
+    apollo|akatsuki|aurora)
+      DEVICE_CODE="$1"
+      DEVICE_REPO="https://github.com/juniarafi213/device_sony_$1"
+      DEVICE_BRANCH="lineage-23.2"
+      VENDOR_REPO="https://github.com/juniarafi213/vendor_sony_$1"
+      VENDOR_BRANCH="lineage-23.2"
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+# =========================================================
+# BUILD
+# =========================================================
+start_build_process() {
+  START_TIME=$(date +%s)
+
+  echo "Sending build start message..."
+  tg_send "⚙️ <b>ROM Build Started!</b>
+
+• <b>ROM:</b> ${BUILD_TARGET}
+• <b>Android:</b> ${ANDROID_VERSION}
+• <b>Device:</b> ${DEVICE_CODE}
+• <b>Server:</b> foss.crave.io
+• <b>Start:</b> $(date '+%Y-%m-%d %H:%M:%S %Z')"
+
+  echo "Removing local changes..."
+  rm -rf .repo/local_manifests
+  rm -rf device/sony/"$DEVICE_CODE" device/sony/tama-common
+  rm -rf kernel/sony/sdm845
+  rm -rf hardware/sony/SonyOpenTelephony
+  rm -rf vendor/sony/"$DEVICE_CODE" vendor/sony/tama-common
+
+  echo "Set github account..."
+  git config --global user.name "juniarafi213"
+  git config --global user.email "juniarafi506@gmail.com"
+
+  echo "Initializing repo..."
+  $BASE_REPO_INIT
+
+  echo "Syncing sources..."
+  if [ -f /opt/crave/resync.sh ]; then
+    /opt/crave/resync.sh
+  fi
+  repo sync
+
+  echo "Cloning device trees..."
+  git clone "$KERNEL_REPO" -b "$KERNEL_BRANCH" --depth=1 kernel/sony/sdm845
+  git clone "$HARDWARE_SONY_REPO" -b "$HARDWARE_SONY_BRANCH" --depth=1 hardware/sony/SonyOpenTelephony
+  git clone "$DEVICE_REPO" -b "$DEVICE_BRANCH" --depth=1 device/sony/"$DEVICE_CODE"
+  git clone "$DEVICE_COMMON_REPO" -b "$DEVICE_COMMON_BRANCH" --depth=1 device/sony/tama-common
+  git clone "$VENDOR_REPO" -b "$VENDOR_BRANCH" --depth=1 vendor/sony/"$DEVICE_CODE"
+  git clone "$VENDOR_COMMON_REPO" -b "$VENDOR_COMMON_BRANCH" --depth=1 vendor/sony/tama-common
+
+  echo "Applying patches..."
+  apply_patches || { echo "Patch step failed, aborting build."; exit 1; }
+
+  force_opengl_default
+
+  echo "Starting ROM build..."
+  source build/envsetup.sh
+  brunch "$DEVICE_CODE"
+  BUILD_STATUS=$?
+
+  END_TIME=$(date +%s)
+  DURATION=$((END_TIME - START_TIME))
+  DURATION_FORMATTED=$(format_duration "$DURATION")
+
+  if [[ $BUILD_STATUS -eq 0 ]]; then
+    ZIP_FILE=$(ls -t out/target/product/"$DEVICE_CODE"/*"$DEVICE_CODE"*.zip 2>/dev/null | head -n 1)
+    UPLOAD_RESULT=$(upload_files "$ZIP_FILE")
+
+    if [[ "$UPLOAD_RESULT" != "UPLOAD_FAILED" ]]; then
+      IFS='|' read -r FILENAME FILESIZE GOLINK <<< "$UPLOAD_RESULT"
+      tg_send "✅ <b>ROM Build Finished!</b>
+
+• <b>ROM:</b> ${BUILD_TARGET}
+• <b>Device:</b> ${DEVICE_CODE}
+• <b>File:</b> ${FILENAME}
+• <b>Size:</b> ${FILESIZE}
+• <b>Link:</b> ${GOLINK}
+• <b>Duration:</b> ${DURATION_FORMATTED}"
+    else
+      tg_send "✅ <b>ROM Build Finished!</b> (upload failed)
+
+• <b>Device:</b> ${DEVICE_CODE}
+• <b>Duration:</b> ${DURATION_FORMATTED}"
+    fi
+  else
+    tg_send "❌ <b>ROM Build Failed!</b>
+
+• <b>Device:</b> ${DEVICE_CODE}
+• <b>Exit code:</b> ${BUILD_STATUS}
+• <b>Duration:</b> ${DURATION_FORMATTED}"
+    exit "$BUILD_STATUS"
+  fi
+}
+
+# =========================================================
+# MAIN
+# =========================================================
+if [ -z "$1" ]; then
+  usage
+  exit 1
+fi
+
+set_device_vars "$1"
 start_build_process
