@@ -133,7 +133,18 @@ apply_patches() {
     local file="/tmp/$(basename "$url")"
     echo "Applying patch: $url -> $dir"
     wget -q "$url" -O "$file" || { echo "Download failed: $url"; return 1; }
-    ( cd "$dir" && git am -3 "$file" ) || { echo "Patch failed: $url"; return 1; }
+    if [ ! -d "$dir" ]; then
+      echo "Target directory $dir does not exist! Aborting patch."
+      return 1
+    fi
+    (
+      cd "$dir" || exit 1
+      if git apply -R --check "$file" &>/dev/null; then
+        echo "Patch already applied in $dir, skipping."
+      else
+        git am -3 "$file" || { git am --abort 2>/dev/null; echo "Patch failed: $url"; exit 1; }
+      fi
+    ) || return 1
   done
   return 0
 }
@@ -194,36 +205,50 @@ start_build_process() {
 • <b>ROM:</b> ${BUILD_TARGET}
 • <b>Android:</b> ${ANDROID_VERSION}
 • <b>Device:</b> ${DEVICE_CODE}
-• <b>Server:</b> foss.crave.io
+• <b>Server:</b> $(hostname 2>/dev/null || echo "Build Server")
 • <b>Start:</b> $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
-  echo "Removing local changes..."
+  echo "Configuring git credentials and cookiefile..."
+  touch ~/.gitcookies
+  git config --global http.cookiefile ~/.gitcookies 2>/dev/null || true
+  git config --global user.name "juniarafi213"
+  git config --global user.email "juniarafi506@gmail.com"
+
+  echo "Removing local changes & previous device trees..."
   rm -rf .repo/local_manifests
   rm -rf device/sony/"$DEVICE_CODE" device/sony/tama-common
   rm -rf kernel/sony/sdm845
   rm -rf hardware/sony/SonyOpenTelephony
   rm -rf vendor/sony/"$DEVICE_CODE" vendor/sony/tama-common
 
-  echo "Set github account..."
-  git config --global user.name "juniarafi213"
-  git config --global user.email "juniarafi506@gmail.com"
-
   echo "Initializing repo..."
-  $BASE_REPO_INIT
+  $BASE_REPO_INIT || {
+    echo "repo init failed!"
+    tg_send "❌ <b>ROM Build Failed!</b>%0A• <b>Device:</b> ${DEVICE_CODE}%0A• <b>Step:</b> repo init failed"
+    exit 1
+  }
 
   echo "Syncing sources..."
   if [ -f /opt/crave/resync.sh ]; then
     /opt/crave/resync.sh
   fi
-  repo sync
+  SYNC_JOBS=$(nproc 2>/dev/null || echo 4)
+  repo sync -c -j"$SYNC_JOBS" --force-sync --no-clone-bundle --no-tags || {
+    echo "repo sync with -j$SYNC_JOBS failed, retrying with -j16..."
+    repo sync -c -j16 --force-sync --no-clone-bundle --no-tags || {
+      echo "repo sync failed permanently!"
+      tg_send "❌ <b>ROM Build Failed!</b>%0A• <b>Device:</b> ${DEVICE_CODE}%0A• <b>Step:</b> repo sync failed"
+      exit 1
+    }
+  }
 
   echo "Cloning device trees..."
-  git clone "$KERNEL_REPO" -b "$KERNEL_BRANCH" --depth=1 kernel/sony/sdm845
-  git clone "$HARDWARE_SONY_REPO" -b "$HARDWARE_SONY_BRANCH" --depth=1 hardware/sony/SonyOpenTelephony
-  git clone "$DEVICE_REPO" -b "$DEVICE_BRANCH" --depth=1 device/sony/"$DEVICE_CODE"
-  git clone "$DEVICE_COMMON_REPO" -b "$DEVICE_COMMON_BRANCH" --depth=1 device/sony/tama-common
-  git clone "$VENDOR_REPO" -b "$VENDOR_BRANCH" --depth=1 vendor/sony/"$DEVICE_CODE"
-  git clone "$VENDOR_COMMON_REPO" -b "$VENDOR_COMMON_BRANCH" --depth=1 vendor/sony/tama-common
+  git clone "$KERNEL_REPO" -b "$KERNEL_BRANCH" --depth=1 kernel/sony/sdm845 || exit 1
+  git clone "$HARDWARE_SONY_REPO" -b "$HARDWARE_SONY_BRANCH" --depth=1 hardware/sony/SonyOpenTelephony || exit 1
+  git clone "$DEVICE_REPO" -b "$DEVICE_BRANCH" --depth=1 device/sony/"$DEVICE_CODE" || exit 1
+  git clone "$DEVICE_COMMON_REPO" -b "$DEVICE_COMMON_BRANCH" --depth=1 device/sony/tama-common || exit 1
+  git clone "$VENDOR_REPO" -b "$VENDOR_BRANCH" --depth=1 vendor/sony/"$DEVICE_CODE" || exit 1
+  git clone "$VENDOR_COMMON_REPO" -b "$VENDOR_COMMON_BRANCH" --depth=1 vendor/sony/tama-common || exit 1
 
   echo "Applying patches..."
   apply_patches || { echo "Patch step failed, aborting build."; exit 1; }
@@ -231,6 +256,12 @@ start_build_process() {
   force_opengl_default
 
   echo "Starting ROM build..."
+  if command -v ccache &>/dev/null; then
+    export USE_CCACHE=1
+    export CCACHE_EXEC=$(which ccache)
+    export CCACHE_DIR="${CCACHE_DIR:-$HOME/.ccache}"
+    ccache -M 50G
+  fi
   source build/envsetup.sh
   brunch "$DEVICE_CODE"
   BUILD_STATUS=$?
