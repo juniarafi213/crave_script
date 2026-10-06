@@ -164,12 +164,6 @@ start_build_process() {
     chmod a+x "$HOME/.bin/repo"
   fi
 
-  echo "Cleaning existing device trees..."
-  rm -rf .repo/local_manifests
-  rm -rf device/sony/"$DEVICE_CODE" device/sony/tama-common
-  rm -rf kernel/sony/sdm845
-  rm -rf vendor/sony
-
   echo "Initializing QASSA repo manifest..."
   $BASE_REPO_INIT || {
     echo "repo init failed!"
@@ -188,11 +182,35 @@ start_build_process() {
     }
   }
 
-  echo "Cloning device trees..."
-  git clone "$KERNEL_REPO" -b "$KERNEL_BRANCH" --depth=1 kernel/sony/sdm845 || exit 1
-  git clone "$DEVICE_REPO" -b "$DEVICE_BRANCH" --depth=1 device/sony/"$DEVICE_CODE" || exit 1
-  git clone "$DEVICE_COMMON_REPO" -b "$DEVICE_COMMON_BRANCH" --depth=1 device/sony/tama-common || exit 1
-  git clone "$VENDOR_REPO" -b "$VENDOR_BRANCH" --depth=1 vendor/sony || exit 1
+  echo "Setting up device trees, kernel, and vendor blobs..."
+  rm -rf .repo/local_manifests
+  if [ ! -d "kernel/sony/sdm845/.git" ]; then
+    rm -rf kernel/sony/sdm845
+    git clone "$KERNEL_REPO" -b "$KERNEL_BRANCH" --depth=1 kernel/sony/sdm845 || exit 1
+  else
+    (cd kernel/sony/sdm845 && git fetch origin "$KERNEL_BRANCH" && git checkout "$KERNEL_BRANCH" && git reset --hard origin/"$KERNEL_BRANCH")
+  fi
+
+  if [ ! -d "device/sony/$DEVICE_CODE/.git" ]; then
+    rm -rf device/sony/"$DEVICE_CODE"
+    git clone "$DEVICE_REPO" -b "$DEVICE_BRANCH" --depth=1 device/sony/"$DEVICE_CODE" || exit 1
+  else
+    (cd device/sony/"$DEVICE_CODE" && git fetch origin "$DEVICE_BRANCH" && git checkout "$DEVICE_BRANCH" && git reset --hard origin/"$DEVICE_BRANCH")
+  fi
+
+  if [ ! -d "device/sony/tama-common/.git" ]; then
+    rm -rf device/sony/tama-common
+    git clone "$DEVICE_COMMON_REPO" -b "$DEVICE_COMMON_BRANCH" --depth=1 device/sony/tama-common || exit 1
+  else
+    (cd device/sony/tama-common && git fetch origin "$DEVICE_COMMON_BRANCH" && git checkout "$DEVICE_COMMON_BRANCH" && git reset --hard origin/"$DEVICE_COMMON_BRANCH")
+  fi
+
+  if [ ! -d "vendor/sony/.git" ]; then
+    rm -rf vendor/sony
+    git clone "$VENDOR_REPO" -b "$VENDOR_BRANCH" --depth=1 vendor/sony || exit 1
+  else
+    (cd vendor/sony && git fetch origin "$VENDOR_BRANCH" && git checkout "$VENDOR_BRANCH" && git reset --hard origin/"$VENDOR_BRANCH")
+  fi
 
   echo "Configuring CCACHE..."
   if command -v ccache &>/dev/null; then
