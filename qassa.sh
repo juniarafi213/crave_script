@@ -178,10 +178,10 @@ start_build_process() {
   }
 
   echo "Syncing sources..."
-  SYNC_JOBS=$(nproc 2>/dev/null || echo 4)
+  SYNC_JOBS=16
   repo sync -c -j"$SYNC_JOBS" --force-sync --no-clone-bundle --no-tags || {
-    echo "repo sync with -j$SYNC_JOBS failed, retrying with -j16..."
-    repo sync -c -j16 --force-sync --no-clone-bundle --no-tags || {
+    echo "repo sync with -j$SYNC_JOBS failed, retrying with -j8..."
+    repo sync -c -j8 --force-sync --no-clone-bundle --no-tags || {
       echo "repo sync failed permanently!"
       tg_send "❌ <b>ROM Build Failed!</b>%0A• <b>Device:</b> ${DEVICE_CODE}%0A• <b>Step:</b> repo sync failed"
       exit 1
@@ -204,6 +204,8 @@ start_build_process() {
 
   echo "Starting QASSA ROM build..."
   export WITH_GAPPS="$WITH_GAPPS"
+  export TARGET_GAPPS_ARCH="arm64"
+  export TARGET_BOOT_ANIMATION_RES="1080"
   source build/envsetup.sh
   lunch "qassa_${DEVICE_CODE}-userdebug" || {
     echo "lunch failed!"
@@ -211,7 +213,8 @@ start_build_process() {
     exit 1
   }
 
-  mka qassa -j"$SYNC_JOBS"
+  BUILD_JOBS=$(nproc 2>/dev/null || echo 4)
+  mka qassa -j"$BUILD_JOBS"
   BUILD_STATUS=$?
 
   END_TIME=$(date +%s)
