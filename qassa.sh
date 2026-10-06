@@ -17,8 +17,8 @@ WITH_GAPPS="${WITH_GAPPS:-true}"
 
 BASE_REPO_INIT="repo init --depth=1 -u https://github.com/keepQASSA/manifest -b Q --git-lfs"
 
-KERNEL_REPO="https://github.com/LineageOS/android_kernel_sony_sdm845"
-KERNEL_BRANCH="lineage-17.1"
+KERNEL_REPO="https://github.com/juniarafi213/kernel_sony_sdm845"
+KERNEL_BRANCH="bpf"
 
 DEVICE_REPO="https://github.com/juniarafi213/device_sony_akari"
 DEVICE_BRANCH="qassa-10"
