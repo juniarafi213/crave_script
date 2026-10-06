@@ -150,6 +150,20 @@ start_build_process() {
   git config --global user.name "juniarafi213"
   git config --global user.email "juniarafi506@gmail.com"
 
+  echo "Ensuring required build tools (repo, python)..."
+  mkdir -p "$HOME/.bin"
+  export PATH="$HOME/.bin:$PATH"
+
+  if ! command -v python &>/dev/null && command -v python3 &>/dev/null; then
+    ln -sf "$(which python3)" "$HOME/.bin/python"
+  fi
+
+  if ! command -v repo &>/dev/null; then
+    echo "repo not found, downloading repo tool..."
+    curl -s https://storage.googleapis.com/git-repo-downloads/repo > "$HOME/.bin/repo"
+    chmod a+x "$HOME/.bin/repo"
+  fi
+
   echo "Cleaning existing device trees..."
   rm -rf .repo/local_manifests
   rm -rf device/sony/"$DEVICE_CODE" device/sony/tama-common
